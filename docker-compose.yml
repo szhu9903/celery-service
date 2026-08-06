@@ -1,0 +1,98 @@
+# ==============================================================================
+# docker-compose.yml  (src 布局)
+#
+# Profiles:
+#   (default)    worker-default + worker-high + worker-low + beat
+#   tools        + flower
+#
+# 用法:
+#   docker compose up -d
+#   docker compose --profile tools up -d
+#   docker compose logs -f worker-default beat
+# ==============================================================================
+
+x-celery-base: &celery-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: worker
+  environment:
+    ENVIRONMENT: development
+    BROKER_URL: "redis://redis:6379/0"
+    BACKEND_URL: "redis://redis:6379/1"
+    OBS_LOG_FORMAT: console
+    OBS_LOG_LEVEL: DEBUG
+    OBS_PROMETHEUS_ENABLED: "true"
+    OBS_PROMETHEUS_PORT: "9090"
+  env_file: [".env"]           # 本地覆盖 — 文件可选（不存在则忽略）
+  restart: unless-stopped
+  networks: [celery-net]
+
+services:
+  # ── Celery workers ────────────────────────────────────────────────────────
+
+  worker-default:
+    <<: *celery-base
+    command: >
+      celery --app celery_app.workers.main worker
+      --loglevel info
+      --queues default
+      --concurrency 2
+      --hostname default@%h
+#    ports: ["9091:9090"]      # Prometheus 指标
+
+  worker-high:
+    <<: *celery-base
+    command: >
+      celery --app celery_app.workers.main worker
+      --loglevel info
+      --queues high,critical
+      --concurrency 4
+      --hostname high@%h
+#    ports: ["9092:9090"]
+
+  worker-low:
+    <<: *celery-base
+    command: >
+      celery --app celery_app.workers.main worker
+      --loglevel info
+      --queues low
+      --concurrency 1
+      --hostname low@%h
+#    ports: ["9093:9090"]
+
+  # ── Beat 调度器 ───────────────────────────────────────────────────────────
+  # 重要: replicas 必须为 1 — 两个 Beat 实例会导致任务重复触发
+
+  beat:
+    <<: *celery-base
+    build:
+      context: .
+      target: beat
+    command: >
+      celery --app celery_app.workers.main beat
+      --loglevel info
+
+  # ── Flower 监控 UI ────────────────────────────────────────────────────────
+
+  flower:
+    profiles:
+      - tools
+    <<: *celery-base
+    build:
+      context: .
+      target: flower
+    command: >
+      celery --app celery_app.workers.main flower
+      --port=5555
+      --persistent=true
+      --db=/tmp/flower
+    environment:
+      BROKER_URL: "redis://redis:6379/0"
+      FLOWER_BASIC_AUTH: "admin:changeme"
+    ports: ["5555:5555"]
+
+
+networks:
+  celery-net:
+    driver: bridge
