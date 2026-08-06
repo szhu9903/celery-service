@@ -1,0 +1,159 @@
+# ==============================================================================
+# pyproject.toml
+# Build backend: hatchling (src layout 零配置，现代 Python 标准)
+# Package manager: uv  (替代 pip + venv + pip-tools)
+#
+# 初始化项目:
+#   uv sync --extra dev          # 安装依赖 + 创建 .venv
+#   uv sync --extra dev,otel     # 同上 + OTel 包
+#
+# 运行命令:
+#   uv run celery ...            # 自动使用 .venv，自动读 .env
+#   uv run pytest tests/unit
+#
+# 锁文件:
+#   uv lock                      # 生成 uv.lock（提交到 git）
+#   uv sync                      # 按 uv.lock 精确复现环境
+# ==============================================================================
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# hatchling src layout 声明 — 就这一行，不需要 setuptools 的多个 section
+[tool.hatch.build.targets.wheel]
+packages = ["src/celery_app"]
+
+# ==============================================================================
+# Project metadata
+# ==============================================================================
+[project]
+name = "celery-service"
+version = "0.1.0"
+description = "Enterprise-grade standalone Celery service"
+readme = "README.md"
+authors = [
+    { name = "szhu9903", email = "szhu9903@gmail.com" }
+]
+requires-python = "==3.11.*"
+dependencies = [
+    # Core
+    "celery[redis,rabbitmq]==5.4.0",
+    "kombu==5.3.7",
+    # Broker / Backend
+    "redis==5.2.1",
+    "hiredis==3.0.0",           # C-extension for faster Redis parsing
+    # Config & Validation
+    "pydantic==2.10.6",
+    "pydantic-settings==2.7.1",
+    "pydantic[email]==2.10.6",
+    # python-dotenv 不需要了：
+    #   - uv run 自动读 .env
+    #   - Pydantic Settings 自己支持 env_file，不依赖 dotenv
+    # Observability — always installed
+    # opentelemetry-api 只是接口层(no-op stubs)，SDK 未安装时零开销
+    "opentelemetry-api==1.29.0",
+    "prometheus-client==0.21.1",
+    "structlog==25.1.0",
+    # Utilities
+    "tenacity==9.0.0",          # Retry logic
+    "orjson==3.10.15",          # Fast JSON
+]
+
+# ==============================================================================
+# Optional dependency groups
+# ==============================================================================
+[project.optional-dependencies]
+
+# OTel 完整链路追踪 (仅在 OBS_OTEL_ENABLED=true 时需要)
+# 安装: uv sync --extra otel
+otel = [
+    "opentelemetry-sdk==1.29.0",
+    "opentelemetry-instrumentation-celery==0.50b0",
+    # gRPC exporter — Jaeger / Tempo / Datadog / 任意 OTLP collector
+    "opentelemetry-exporter-otlp-proto-grpc==1.29.0",
+    # HTTP exporter (更轻量，无 gRPC 依赖，二选一)
+    # "opentelemetry-exporter-otlp-proto-http==1.29.0",
+]
+
+# Flower 监控 UI
+# 安装: uv sync --extra flower
+flower = [
+    "flower==2.0.1",
+]
+
+# 开发 / 测试工具
+# 安装: uv sync --extra dev
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.3",
+    "pytest-celery==1.2.0",
+    "pytest-cov==6.0.0",
+    "pytest-mock==3.14.0",
+    "factory-boy==3.3.1",
+    "freezegun==1.5.1",
+    "ruff==0.9.6",
+    "mypy==1.14.1",
+    "pre-commit==4.1.0",
+]
+
+# 全装 (CI / 本地完整环境)
+# 安装: uv sync --extra all
+all = [
+    "celery-service[otel,flower,dev]",
+]
+
+# ==============================================================================
+# Ruff
+# ==============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "S"]
+ignore = [
+    "S101",  # assert 在测试里是合法的
+    "S105",  # 配置字段名上的误报
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "N"]
+
+# ==============================================================================
+# Mypy
+# ==============================================================================
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+mypy_path = "src"
+
+# ==============================================================================
+# Pytest
+# ==============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=celery_app --cov-report=term-missing --cov-fail-under=80"
+markers = [
+    "integration: 需要运行中的 Redis，用 -m 'not integration' 跳过",
+]
+
+# ==============================================================================
+# Coverage
+# ==============================================================================
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
+
